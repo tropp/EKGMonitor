@@ -32,7 +32,7 @@ import scipy.signal
 import pyqtgraph as pg
 from PyQt4 import QtGui, QtCore
 from pyqtgraph.parametertree import Parameter, ParameterTree
-#import sounddevice as sd
+import sounddevice as sd
 from biosppy.signals import ecg as b_ecg
 
 # perform some initialization and system-dependent activities.
@@ -40,24 +40,24 @@ from biosppy.signals import ecg as b_ecg
 # available on a given system. The printed "devices" list should help with this.
 
 
-mode = 'olimex'  # use olimex on arduino
+mode = 'soundcard'  # use olimex on arduino
 #mode - 'soundcard'  # use system sound card
 assert mode in ['olimex', 'soundcard']
 
-# if mode == 'soundcard':
-#     devices = sd.query_devices()
-#     print devices
-#     opsys = platform.system()
-#     if opsys in ['Windows']:
-#         sd.default.device = 22  # check but should be rear microphone input
-#     elif opsys in ['Darwin']:
-#         indev = sd.query_devices(kind='input')
-#         sd.default.device = 0, 1  # should be the input
-#     else:
-#         raise ValueError('Platform %s is not supported', opsys)
+if mode == 'soundcard':
+    devices = sd.query_devices()
+    print devices
+    opsys = platform.system()
+    if opsys in ['Windows']:
+        sd.default.device = 21  # check but should be rear microphone input
+    elif opsys in ['Darwin']:
+        indev = sd.query_devices(kind='input')
+        sd.default.device = 0, 1  # should be the input
+    else:
+        raise ValueError('Platform %s is not supported', opsys)
     
-#     print 'Using audio input device : %d' % sd.default.device[0]
-#     NChannels = 2
+    print 'Using audio input device : %d' % sd.default.device[0]
+    NChannels = 2
 
 
 class Arduino():
@@ -176,14 +176,14 @@ def checkfs():
     -------
     supported samplerates, as a list that is a subset of the possible sample rates
     """
-    possibleSamplerates = [1./1000, 1./2000, 1./4000, 1./8000, 1,.11025, 1/22050, 
-                            1./32000, 1./44100, 1./48000, 1./96000, 1./128000]
+    possibleSamplerates = [1000, 2000, 4000, 8000, 11025, 22050, 
+                            32000, 44100, 48000, 96000, 128000]
     device = sd.default.device[0]
 
     supported_samplerates = []
     for fs in possibleSamplerates:
         try:
-            sd.check_input_settings(device=device, samplerate=int(1./fs), channels=NChannels)
+            sd.check_input_settings(device=device, samplerate=int(fs), channels=NChannels)
         except Exception as e:
             print(fs, e)
         else:
@@ -230,7 +230,7 @@ class MeasureECG:
 
     def setfs(self, fs):
         self.fs = fs  # set from file and compute a new decimation value
-        self.decimate = int((1./self.fs)/self.analysisSampleFreq)  # decimate to about 1 kHz
+        self.decimate = int((self.fs)/self.analysisSampleFreq)  # decimate to about 1 kHz
 
     def setThreshold(self, threshold=10000):
         """
@@ -270,7 +270,7 @@ class MeasureECG:
         coeffs = scipy.signal.firwin(numtaps, fc/(self.sampleFreq/2.0), pass_zero=True)
         dfilt = scipy.signal.lfilter(coeffs, 1.0, data)
         return dfilt
-
+ 
     def NotchFilter(self, data, fn=60., Q=50.):
         """
         Design and use a Notch (band reject) filter to filter the data
@@ -382,10 +382,10 @@ class MeasureECG:
                 sd.check_input_settings(self.device, samplerate=int(self.fs), channels=self.NChannels)
             except:
                 raise ValueError('Invalid sample rate for input device')
-            self.currentSegment = sd.rec(int(duration / self.fs), samplerate=int(1./self.fs), 
+            self.currentSegment = sd.rec(int(duration * self.fs), samplerate=int(self.fs), 
                     blocking=True, channels=2)
             self.currentSegment = scipy.signal.decimate(self.currentSegment[:,1], self.decimate)
-            self.sampleFreq = (1./self.fs)/self.decimate
+            self.sampleFreq = (self.fs)/self.decimate
             self.lastTimes = np.linspace(0, duration, self.currentSegment.shape[0])
         else: # read from adruino/olimex
             Ard.send_command('a')
@@ -825,10 +825,10 @@ class Updater():
         self.ecg.currentSegment = self.ecg.currentSegment - np.mean(self.ecg.currentSegment) 
         filtered_signal = self.ecg.currentSegment
         filtered_signal = self.ecg.LPFilter(self.ecg.currentSegment,
-                         fc=self.LPFFreq/self.ecg.sampleFreq)
+                         fc=self.LPFFreq)
         if self.ecg.NotchEnabled:
             filtered_signal = self.ecg.NotchFilter(filtered_signal,
-                         fn=self.NotchFreq/self.ecg.sampleFreq)
+                         fn=self.NotchFreq)
         ctime = datetime.datetime.now()
         self.runtime = (ctime - self.startTime).seconds/60.
         self.pltd['plt_first'].plot(self.ecg.lastTimes, filtered_signal, clear=True, pen=pg.mkPen('g'))
@@ -838,7 +838,6 @@ class Updater():
         except:  # catch lack of a signal
             print 'No beats detected'
             self.NSamples = self.NSamples + 1
-            # then plot to the template window to show us what is really there
             self.pltd['plt_first'].plot(self.ecg.lastTimes, self.ecg.currentSegment, clear=True, pen=pg.mkPen('r'))
             return
         print "%s   %8.1f bpm" % (ctime, np.mean(self.out[-1]['heart_rate']))
